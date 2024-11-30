@@ -1,0 +1,17 @@
+# Docker Hub Organization
+docker_hub_org: codesec
+
+# Default image tag
+tag: latest
+
+# Platforms to build for
+platforms:
+  - linux/amd64
+  - linux/arm64
+
+# Folders to ignore during build
+ignore_list:
+  - .git
+  - .github
+  - __pycache__
+  - venv

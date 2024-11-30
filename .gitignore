@@ -1,0 +1,64 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+env/
+venv/
+ENV/
+.venv/
+
+# Environment variables
+.env
+.env.*
+
+# Logs and debug
+*.log
+*.out
+*.err
+logs/
+debug.log
+
+# IDE-specific files
+.idea/
+.vscode/
+*.sublime-workspace
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Docker-specific
+docker-compose.override.yml
+*.env
+*.dockerfile
+**/.dockerignore
+**/Dockerfile~
+
+# Python testing
+.pytest_cache/
+.tox/
+coverage/
+*.cover
+*.pyc
+.coverage.*
+.nox/
+
+# YAML and configuration backup
+*.yaml~
+*.yml~
+*.bak
+
+# Miscellaneous
+*.swp
+*.tmp
