@@ -166,13 +166,24 @@ class ConnectorDockerBuilder:
                 self.logger.info(f"Skipping {folder}: Invalid connector")
                 continue
             
-            # Prepare image name
-            image_name = (f"{self.docker_hub_org}/{folder}:{self.tag}" 
-                          if self.docker_hub_org 
-                          else f"{folder}:{self.tag}")
+            # Add "connector-" prefix to the image name
+            prefixed_folder = f"connector-{folder}"
             
-            # Build and push multi-arch image
-            success = self._build_and_push_multiarch(connector_path, image_name)
+            # Build both latest and version-tagged images
+            image_tags = [self.tag]
+            if self.tag != 'latest':
+                image_tags.append('latest')
+            
+            success = True
+            for tag in image_tags:
+                # Prepare image name with connector prefix
+                image_name = (f"{self.docker_hub_org}/{prefixed_folder}:{tag}" 
+                            if self.docker_hub_org 
+                            else f"{prefixed_folder}:{tag}")
+                
+                # Build and push multi-arch image
+                build_success = self._build_and_push_multiarch(connector_path, image_name)
+                success = success and build_success
             
             results.append((folder, success))
         
@@ -289,8 +300,6 @@ def main():
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)
-
-
 
 if __name__ == '__main__':
     main()
