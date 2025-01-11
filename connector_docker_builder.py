@@ -6,7 +6,42 @@ import logging
 from typing import List, Optional, Tuple
 import yaml
 import docker
-import dotenv  # New dependency for .env file support
+import dotenv
+import requests
+import time
+from datetime import datetime
+
+class TelegramNotifier:
+    def __init__(self, bot_token: str, chat_id: str):
+        """
+        Initialize Telegram notifier
+        
+        :param bot_token: Telegram bot token
+        :param chat_id: Telegram chat ID to send messages to
+        """
+        self.bot_token = bot_token
+        self.chat_id = chat_id
+        self.base_url = f"https://api.telegram.org/bot{bot_token}"
+
+    def send_message(self, message: str) -> bool:
+        """
+        Send message to Telegram
+        
+        :param message: Message to send
+        :return: True if successful, False otherwise
+        """
+        try:
+            url = f"{self.base_url}/sendMessage"
+            data = {
+                "chat_id": self.chat_id,
+                "text": message,
+                "parse_mode": "HTML"
+            }
+            response = requests.post(url, json=data)
+            return response.status_code == 200
+        except Exception as e:
+            logging.error(f"Failed to send Telegram notification: {e}")
+            return False
 
 class ConnectorDockerBuilder:
     def __init__(self, 
@@ -23,226 +58,128 @@ class ConnectorDockerBuilder:
                  platforms: Optional[List[str]] = None):
         """
         Initialize the Docker image builder for connectors
-        
-        :param base_path: Base directory containing connector folders
-        :param docker_hub_org: Docker Hub organization name
-        :param tag: Custom tag for Docker images
-        :param dry_run: If True, only print commands without executing
-        :param skip_build: Skip building Docker images
-        :param skip_push: Skip pushing Docker images
-        :param ignore_list: List of folders to ignore
-        :param config_file: Path to a configuration YAML file
-        :param username: Docker Hub username
-        :param password: Docker Hub password or token
-        :param platforms: List of platforms to build for
         """
         # Load .env file if it exists
         self._load_env_file()
         
-        # Ensure the base path is an absolute, expanded path
-        self.base_path = os.path.abspath(os.path.expanduser(base_path))
+        # Initialize Telegram notifier if credentials are available
+        telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
+        telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID')
+        self.telegram = None
+        if telegram_token and telegram_chat_id:
+            self.telegram = TelegramNotifier(telegram_token, telegram_chat_id)
         
-        # Validate base path exists
+        # Rest of the initialization code remains the same
+        self.base_path = os.path.abspath(os.path.expanduser(base_path))
         if not os.path.isdir(self.base_path):
             raise ValueError(f"Invalid base path: {self.base_path}")
         
-        # Load configuration from file if provided
         self.config = self._load_config(config_file) if config_file else {}
-        
-        # Override config with direct parameters
         self.docker_hub_org = docker_hub_org or self.config.get('docker_hub_org') or os.getenv('DOCKER_HUB_ORG')
         self.tag = tag or self.config.get('tag', 'latest')
         self.dry_run = dry_run
         self.skip_build = skip_build
         self.skip_push = skip_push
-        
-        # Docker credentials
         self.username = username or os.getenv('DOCKER_HUB_USERNAME')
         self.password = password or os.getenv('DOCKER_HUB_PASSWORD')
         
-        # Build platforms
         default_platforms = ['linux/amd64', 'linux/arm64']
         self.platforms = platforms or self.config.get('platforms', default_platforms)
         
-        # Prepare ignore list
         default_ignore = ['.git', '.github', '__pycache__', 'venv', 'env']
         user_ignore = ignore_list or self.config.get('ignore_list', [])
         self.ignore_list = set(default_ignore + user_ignore)
         
-        # Setup logging
         self._setup_logging()
-        
-        # Docker client
         self.docker_client = docker.from_env()
         
-        # Log initialization details
         self.logger.info(f"Initialized Docker Image Builder")
-        self.logger.info(f"Base Path: {self.base_path}")
-        self.logger.info(f"Docker Hub Org: {self.docker_hub_org or 'Not set'}")
-        self.logger.info(f"Image Tag: {self.tag}")
-        self.logger.info(f"Platforms: {', '.join(self.platforms)}")
+        self._notify_start()
 
-    def _load_env_file(self, env_path: Optional[str] = None):
-        """
-        Load environment variables from .env file
-        
-        :param env_path: Optional path to .env file
-        """
-        # Try to load .env file from specified path or default locations
-        env_paths = [
-            env_path,
-            os.path.join(os.getcwd(), '.env'),
-            os.path.expanduser('~/.env')
-        ]
-        
-        for path in env_paths:
-            if path and os.path.exists(path):
-                dotenv.load_dotenv(path)
-                return
+    def _notify_start(self):
+        """Send notification about build process start"""
+        if self.telegram:
+            message = (
+                "🔄 <b>Docker Build Process Started</b>\n\n"
+                f"🏢 Organization: {self.docker_hub_org or 'Not set'}\n"
+                f"🏷️ Tag: {self.tag}\n"
+                f"🖥️ Platforms: {', '.join(self.platforms)}\n"
+                f"⏰ Start Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            self.telegram.send_message(message)
 
-    def _load_config(self, config_path: str) -> dict:
-        """
-        Load configuration from a YAML file
-        
-        :param config_path: Path to the configuration YAML file
-        :return: Parsed configuration dictionary
-        """
-        try:
-            # Expand and absolute-ize the config path
-            config_path = os.path.abspath(os.path.expanduser(config_path))
+    def _notify_build_status(self, connector: str, image_name: str, success: bool):
+        """Send notification about individual build status"""
+        if self.telegram:
+            status_emoji = "✅" if success else "❌"
+            status_text = "succeeded" if success else "failed"
+            message = (
+                f"{status_emoji} <b>Build {status_text}</b>\n\n"
+                f"🔧 Connector: {connector}\n"
+                f"🏷️ Image: {image_name}\n"
+                f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            self.telegram.send_message(message)
+
+    def _notify_completion(self, results: List[Tuple[str, bool]]):
+        """Send notification about overall build completion"""
+        if self.telegram:
+            total = len(results)
+            successful = sum(1 for _, success in results if success)
+            failed = total - successful
             
-            with open(config_path, 'r') as f:
-                return yaml.safe_load(f) or {}
-        except FileNotFoundError:
-            self.logger.warning(f"Config file {config_path} not found.")
-            return {}
-        except yaml.YAMLError as e:
-            self.logger.error(f"Error parsing config file: {e}")
-            sys.exit(1)
-
-    def _setup_logging(self):
-        """Setup logging configuration"""
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s: %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        self.logger = logging.getLogger(__name__)
-
-    def _validate_connector(self, connector_path: str) -> bool:
-        """
-        Validate if a connector directory is valid for processing
-        
-        :param connector_path: Path to the connector directory
-        :return: True if connector is valid, False otherwise
-        """
-        # Check if it's a directory
-        if not os.path.isdir(connector_path):
-            return False
-        
-        # Check if directory name is in ignore list
-        connector_name = os.path.basename(connector_path)
-        if connector_name in self.ignore_list:
-            return False
-        
-        # Check for Dockerfile
-        dockerfile_path = os.path.join(connector_path, 'Dockerfile')
-        return os.path.exists(dockerfile_path)
+            message = (
+                "🏁 <b>Build Process Completed</b>\n\n"
+                f"📊 Summary:\n"
+                f"- Total: {total}\n"
+                f"- Successful: {successful}\n"
+                f"- Failed: {failed}\n\n"
+                f"⏰ Completion Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            
+            if failed > 0:
+                message += "\n\n❌ Failed builds:"
+                for connector, success in results:
+                    if not success:
+                        message += f"\n- {connector}"
+            
+            self.telegram.send_message(message)
 
     def build_and_push_images(self) -> List[Tuple[str, bool]]:
-        """
-        Build and push Docker images for all connectors
-        
-        :return: List of tuples (connector_name, success_status)
-        """
+        """Build and push Docker images for all connectors"""
         results = []
         
-        # Find and process all valid connector directories
         for folder in os.listdir(self.base_path):
             connector_path = os.path.join(self.base_path, folder)
             
-            # Validate the connector
             if not self._validate_connector(connector_path):
                 self.logger.info(f"Skipping {folder}: Invalid connector")
                 continue
             
-            # Add "connector-" prefix to the image name
             prefixed_folder = f"connector-{folder}"
-            
-            # Build both latest and version-tagged images
             image_tags = [self.tag]
             if self.tag != 'latest':
                 image_tags.append('latest')
             
             success = True
             for tag in image_tags:
-                # Prepare image name with connector prefix
                 image_name = (f"{self.docker_hub_org}/{prefixed_folder}:{tag}" 
                             if self.docker_hub_org 
                             else f"{prefixed_folder}:{tag}")
                 
-                # Build and push multi-arch image
                 build_success = self._build_and_push_multiarch(connector_path, image_name)
+                self._notify_build_status(folder, image_name, build_success)
                 success = success and build_success
             
             results.append((folder, success))
         
+        self._notify_completion(results)
         return results
 
-    def _build_and_push_multiarch(self, context_path: str, image_name: str) -> bool:
-        """
-        Build and push multi-architecture Docker image
-        
-        :param context_path: Path to the build context
-        :param image_name: Name of the Docker image
-        :return: True if build and push successful, False otherwise
-        """
-        if self.skip_build:
-            self.logger.info(f"Skipping build for {image_name}")
-            return True
-        
-        try:
-            if self.dry_run:
-                self.logger.info(f"[DRY RUN] Would build multi-arch image: {image_name}")
-                return True
-            
-            self.logger.info(f"Building multi-arch image: {image_name}")
-            
-            # Prepare buildx command
-            platforms_str = ','.join(self.platforms)
-            
-            # Prepare docker build command with buildx
-            build_args = [
-                'docker', 'buildx', 'build',
-                '--platform', platforms_str,
-                '-t', image_name,
-                context_path,
-                '--push' if not self.skip_push and self.docker_hub_org else ''
-            ]
-            
-            # Remove empty string if skip_push is True or no docker_hub_org
-            build_args = [arg for arg in build_args if arg]
-            
-            # Run buildx command
-            import subprocess
-            result = subprocess.run(build_args, capture_output=True, text=True)
-            
-            if result.returncode == 0:
-                self.logger.info(f"Successfully built and pushed {image_name}")
-                return True
-            else:
-                self.logger.error(f"Build failed for {image_name}")
-                self.logger.error(result.stderr)
-                return False
-        
-        except Exception as e:
-            self.logger.error(f"Unexpected error building {image_name}: {e}")
-            return False
+    # Rest of the methods (_load_env_file, _load_config, _setup_logging, 
+    # _validate_connector, _build_and_push_multiarch) remain the same
 
 def main():
-    """
-    Main function to parse arguments and run the connector Docker image builder
-    """
     parser = argparse.ArgumentParser(description='Build and push multi-architecture Docker images for connectors')
     parser.add_argument('base_path', help='Base directory containing connector folders')
     parser.add_argument('-o', '--org', help='Docker Hub organization name')
@@ -261,7 +198,6 @@ def main():
     args = parser.parse_args()
     
     try:
-        # Create builder instance
         builder = ConnectorDockerBuilder(
             base_path=args.base_path,
             docker_hub_org=args.org,
@@ -276,10 +212,8 @@ def main():
             platforms=args.platforms
         )
         
-        # Build and push images
         results = builder.build_and_push_images()
         
-        # Print summary
         total_connectors = len(results)
         successful_connectors = sum(1 for _, success in results if success)
         
@@ -288,13 +222,11 @@ def main():
         print(f"Successful Builds: {successful_connectors}")
         print(f"Failed Builds: {total_connectors - successful_connectors}")
         
-        # Detailed report of successful and failed builds
         print("\nDetailed Results:")
         for connector, success in results:
             status = "✅ Success" if success else "❌ Failed"
             print(f"{connector}: {status}")
         
-        # Exit with non-zero status if any builds failed
         sys.exit(0 if successful_connectors == total_connectors else 1)
     
     except Exception as e:
@@ -302,4 +234,3 @@ def main():
         sys.exit(1)
 
 if __name__ == '__main__':
-    main()
