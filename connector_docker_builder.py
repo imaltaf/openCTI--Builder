@@ -59,6 +59,17 @@ class ConnectorDockerBuilder:
         """
         Initialize the Docker image builder for connectors
         """
+        def _load_env_file(self):
+    """
+    Load environment variables from a .env file if specified or found in the base directory.
+    """
+    env_file = os.getenv('ENV_FILE', '.env')
+    if os.path.exists(env_file):
+        dotenv.load_dotenv(env_file)
+        self.logger.info(f"Loaded environment variables from {env_file}")
+    else:
+        self.logger.info("No .env file found or specified.")
+
         # Load .env file if it exists
         self._load_env_file()
         
